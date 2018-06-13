@@ -12,7 +12,6 @@ use precision,                   only: r8
 use chemistry_specification,     only: nSpecies_specified
 use solver_specification,        only: ndiv
 use rosenbrock_integrator,       only: Rosenbrock
-use forcing_and_jacobian,        only: forcingParam_type
 
 implicit none
 
@@ -49,22 +48,19 @@ contains
 
 
   ! returns 0 for failure, 1 for success, other integers for other data
-  subroutine chemSolve_run (nkReact, vmr_init, timeStepSize, kRateConst, absTol, relTol, vmr_final, ierr)
+  subroutine chemSolve_run (vmr_init, timeStepSize, absTol, relTol, vmr_final, ierr)
   !---------------------------------------------------------------
   ! Run the chemistry solver
   !---------------------------------------------------------------
 
-    integer, intent(in) :: nkReact
     real(r8), pointer, intent(in) :: vmr_init(:)
     real(r8), intent(in) :: timeStepSize
-    real(r8), pointer, intent(in) ::  kRateConst(:)   ! rates constants for each reaction
     real(r8), intent(in) :: absTol(:)
     real(r8), intent(in) :: relTol(:)
     real(r8), intent(out) :: vmr_final(:)             ! Final VMR
     integer, intent(out) :: ierr
    
-    type(forcingParam_type) :: forcingParam
-    real(r8)                :: vmr_curr(size(vmr_final))      ! Value of current VMR
+    real(r8)                :: vmr_curr(size(vmr_init))      ! Value of current VMR
 
     integer  :: icntrl(20), istatus(20)
     real(r8) :: rcntrl(20), rstatus(20)
@@ -73,15 +69,10 @@ contains
     real(r8) :: timeEnd, time
 
     icntrl(:) = 0 ; rcntrl(:) = 0._r8
+    istatus(:) = 0 ; rstatus(:) = 0._r8
 
     icntrl(1) = 1                                 ! autonomous, F depends only on Y
     icntrl(3) = 2                                 ! ros3 solver
-
-    forcingParam%nkReact = nkReact
-    allocate(forcingParam%k_rateConst(nkReact))
-
-    ! Allocate forcingParam arrays for use internally in rosenbrock
-    forcingParam%k_rateConst(:) = kRateConst(:)
 
     ! Start the VMR array with the initial setting
     vmr_curr(:) = vmr_init(:)
@@ -95,7 +86,7 @@ contains
 
        ! using rosenbrock ros3 solver
         call Rosenbrock( nSpecies, vmr_curr, &
-                         timeStart, timeStepSize,  forcingParam, absTol, relTol, &
+                         timeStart, timeStepSize,  absTol, relTol, &
                          rcntrl, icntrl, rstatus, istatus, ierr )
 
         if( ierr /= 1 ) exit
@@ -105,9 +96,9 @@ contains
         Time = Time + timeStepSize
 
     end do
-  
-    deallocate(forcingParam%k_rateConst)
 
+    write(*,'(a,i8)') ' Total steps = ',istatus(9)
+  
   end subroutine chemSolve_run
     
   

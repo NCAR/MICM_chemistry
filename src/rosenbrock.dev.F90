@@ -10,7 +10,6 @@
 MODULE Rosenbrock_Integrator
 
   USE precision, only : r8
-  use forcing_and_jacobian, only : forcingParam_type
 
   IMPLICIT NONE
   PUBLIC
@@ -19,13 +18,14 @@ MODULE Rosenbrock_Integrator
 !~~~>  Statistics on the work performed by the Rosenbrock method
   INTEGER, PARAMETER :: Nfun=1, Njac=2, Nstp=3, Nacc=4, &
                         Nrej=5, Ndec=6, Nsol=7, Nsng=8, &
+                        Ntotstp= 9, &
                         Ntexit=1, Nhexit=2, Nhnew = 3
 
 CONTAINS
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 SUBROUTINE Rosenbrock(N,Y,Tstart,Tend, &
-           forcingParam, AbsTol,RelTol,&
+           AbsTol,RelTol,&
            RCNTRL,ICNTRL,RSTATUS,ISTATUS,IERR)
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !
@@ -141,11 +141,12 @@ SUBROUTINE Rosenbrock(N,Y,Tstart,Tend, &
 !
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+   use rate_frc_jac_module, only : rate_frc_jac_type
+
 !~~~>  Arguments
    INTEGER,  INTENT(IN)    :: N
    REAL(r8), INTENT(INOUT) :: Y(N)
    REAL(r8), INTENT(IN)    :: Tstart,Tend
-   TYPE(forcingParam_type), INTENT(IN)    :: forcingParam
    REAL(r8), INTENT(IN)    :: AbsTol(N),RelTol(N)
    INTEGER,       INTENT(IN)    :: ICNTRL(20)
    REAL(r8), INTENT(IN)    :: RCNTRL(20)
@@ -165,6 +166,7 @@ SUBROUTINE Rosenbrock(N,Y,Tstart,Tend, &
    REAL(r8) :: Texit
    INTEGER       :: i, UplimTol, Max_no_steps
    LOGICAL       :: Autonomous, VectorTol
+   TYPE(rate_frc_jac_type) :: rate_frc_jac
 !~~~>   Parameters
    REAL(r8), PARAMETER :: ZERO = 0.0_r8, ONE  = 1.0_r8
    REAL(r8), PARAMETER :: DeltaMin = 1.0E-5_r8
@@ -300,9 +302,17 @@ SUBROUTINE Rosenbrock(N,Y,Tstart,Tend, &
       END IF
     END DO
 
+    call rate_frc_jac%k_rateConst_register
+    call rate_frc_jac%k_rateConst_init
+    call rate_frc_jac%k_rateConst_run
+
+    IF( istatus(Ntotstp) == 0 ) THEN
+      call rate_frc_jac%k_rateConst_print
+    ENDIF
+
 !~~~>  CALL Rosenbrock method
    CALL ros_Integrator(Y, Tstart, Tend,          &
-        forcingParam, Texit,       &
+        Texit,       &
         AbsTol, RelTol,                          &
 !  Integration parameters
         Autonomous, VectorTol, Max_no_steps,     &
@@ -357,7 +367,7 @@ CONTAINS !  SUBROUTINES internal to Rosenbrock
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  SUBROUTINE ros_Integrator (Y, Tstart, Tend,     &
-        forcingParam, T,           &
+        T,           &
         AbsTol, RelTol,                          &
 !~~~> Integration parameters
         Autonomous, VectorTol, Max_no_steps,     &
@@ -375,7 +385,6 @@ CONTAINS !  SUBROUTINES internal to Rosenbrock
    REAL(r8), INTENT(INOUT) :: Y(N)
 !~~~> Input: integration interval
    REAL(r8), INTENT(IN) :: Tstart,Tend
-   TYPE(forcingParam_type), INTENT(IN)    :: forcingParam
 !~~~> Output: time at which the solution is returned (T=Tend if success)
    REAL(r8), INTENT(OUT) ::  T
 !~~~> Input: tolerances
@@ -434,16 +443,16 @@ TimeLoop: DO WHILE ( (Direction > 0).AND.((T-Tend)+Roundoff <= ZERO) &
    H = MIN(H,ABS(Tend-T))
 
 !~~~>   Compute the function at current time
-   CALL FunTemplate( N, T, Y, forcingParam, Fcn0 )
+   CALL FunTemplate( N, T, Y, Fcn0 )
    ISTATUS(Nfun) = ISTATUS(Nfun) + 1
 
 !~~~>  Compute the function derivative with respect to T
    IF (.NOT.Autonomous) THEN
-      CALL ros_FunTimeDerivative( T, Roundoff, Y, Fcn0, forcingParam, dFdT )
+      CALL ros_FunTimeDerivative( T, Roundoff, Y, Fcn0, dFdT )
    END IF
 
 !~~~>   Compute the Jacobian at current time
-   CALL JacTemplate( N, T, Y, forcingParam, Jac0 )
+   CALL JacTemplate( N, T, Y, Jac0 )
    ISTATUS(Njac) = ISTATUS(Njac) + 1
 
 !~~~>  Repeat step calculation until current step accepted
@@ -469,7 +478,7 @@ Stage: DO istage = 1, ros_S
              Ynew(1:N) = Ynew(1:N) + ros_A(S_ndx+j)*K(1:N,j)
            END DO
            Tau = T + ros_Alpha(istage)*Direction*H
-           CALL FunTemplate( N, Tau, Ynew, forcingParam, Fcn )
+           CALL FunTemplate( N, Tau, Ynew, Fcn )
            ISTATUS(Nfun) = ISTATUS(Nfun) + 1
          ENDIF
          K(1:N,istage) = Fcn(1:N)
@@ -504,6 +513,7 @@ Stage: DO istage = 1, ros_S
 
 !~~~>  Check the error magnitude and adjust step size
    ISTATUS(Nstp) = ISTATUS(Nstp) + 1
+   ISTATUS(Ntotstp) = ISTATUS(Ntotstp) + 1
 Accepted: &
    IF ( (Err <= ONE).OR.(H <= Hmin) ) THEN
       ISTATUS(Nacc) = ISTATUS(Nacc) + 1
@@ -574,14 +584,13 @@ Accepted: &
 
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  SUBROUTINE ros_FunTimeDerivative ( T, Roundoff, Y, Fcn0, forcingParam, dFdT )
+  SUBROUTINE ros_FunTimeDerivative ( T, Roundoff, Y, Fcn0, dFdT )
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !~~~> The time partial derivative of the function by finite differences
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 !~~~> Input arguments
    REAL(r8), INTENT(IN) :: T, Roundoff, Y(N), Fcn0(N)
-   TYPE(forcingParam_type), INTENT(IN)    :: forcingParam
 
 !~~~> Output arguments
    REAL(r8), INTENT(OUT) :: dFdT(N)
@@ -591,7 +600,7 @@ Accepted: &
    REAL(r8), PARAMETER :: ONE = 1.0_r8, DeltaMin = 1.0E-6_r8
 
    Delta = SQRT(Roundoff)*MAX(DeltaMin,ABS(T))
-   CALL FunTemplate( N, T+Delta, Y, forcingParam, dFdT )
+   CALL FunTemplate( N, T+Delta, Y, dFdT )
    ISTATUS(Nfun) = ISTATUS(Nfun) + 1
    factor = ONE/Delta
    dFdT(1:N) = factor*(dFdT(1:N) - Fcn0(1:N))
@@ -1117,55 +1126,50 @@ Accepted: &
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-!   End of the set of internal Rosenbrock subroutines
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-END SUBROUTINE Rosenbrock
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-SUBROUTINE FunTemplate( N, T, Y, forcingParam, Ydot )
+SUBROUTINE FunTemplate( N, T, Y, Ydot )
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !  Template for the ODE function call.
 !  Updates the rate coefficients (and possibly the fixed species) at each call
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- USE forcing_and_jacobian, only : force
 !~~~> Input variables
    INTEGER, intent(in) :: N
    REAL(r8), intent(in) :: T
    REAL(r8), intent(in) :: Y(N)
-   TYPE(forcingParam_type), INTENT(IN)    :: forcingParam
 !~~~> Output variables
    REAL(r8), intent(out) :: Ydot(N)
 !~~~> Local variables
    REAL(r8) :: Told
 
-   Ydot(:) =  Force(Y, forcingParam)
+   Ydot(:) =  rate_frc_jac%force( Y )
 
 END SUBROUTINE FunTemplate
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-SUBROUTINE JacTemplate( N, T, Y, forcingParam, Jcb )
+SUBROUTINE JacTemplate( N, T, Y, Jcb )
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !  Template for the ODE Jacobian call.
 !  Updates the rate coefficients (and possibly the fixed species) at each call
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- USE forcing_and_jacobian, only : Jac
 
 !~~~> Input variables
    INTEGER, intent(in) :: N
    REAL(r8), intent(in) :: T                     ! time
    REAL(r8), intent(in) :: Y(N)
-   TYPE(forcingParam_type), INTENT(IN)    :: forcingParam
 !~~~> Output variables
    REAL(r8), intent(inout) :: Jcb(N,N)
 !~~~> Local variables
     REAL(r8) :: Told
     INTEGER :: i, j
 
-    Jcb(:,:) = Jac( Y, forcingParam )
+    Jcb(:,:) = rate_frc_jac%Jac( Y )
 
 END SUBROUTINE JacTemplate
+
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!   End of the set of internal Rosenbrock subroutines
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+END SUBROUTINE Rosenbrock
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     SUBROUTINE DGEFA (A, N, IPVT, INFO)
 !***BEGIN PROLOGUE  DGEFA

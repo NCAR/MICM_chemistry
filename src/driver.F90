@@ -4,14 +4,11 @@ program host_model_simulator
 ! Program which simulates the host model for MICM
 !--------------------------------------------------------------------------------
 use chemSolve,          only: chemSolve_register,  chemSolve_init, chemSolve_run
-use k_rateConst_module, only: k_rateConst_register, k_rateConst_init, k_rateConst_run
 use precision,          only: r8
 
 implicit none
 
 integer           :: nSpecies               ! Number of chemical species in run
-integer           :: nkReact                ! Number of k reactions in run
-real(r8), pointer :: k_rateConst(:)         ! K rate constants
 
 real(r8),pointer  :: vmr_init(:)            ! Initial VMR
 real(r8),pointer  :: vmr_curr(:)            ! Current VMR
@@ -36,8 +33,6 @@ real(r8), parameter :: mass_density = 1
 !-----------------------------------------------
 
 call chemSolve_register(nSpecies)
-call k_rateConst_register(nkReact)
-
 
 !-----------------------------------------------
 ! Allocate the local variables  (This will be done via CPF?)
@@ -46,13 +41,11 @@ allocate (vmr_init(nSpecies))
 allocate (vmr_curr(nSpecies))
 allocate (absTol(nSpecies))
 allocate (relTol(nSpecies))
-allocate (k_rateConst(nkReact))
 
 !-----------------------------------------------
 ! Initialize the chemistry packages
 !-----------------------------------------------
 
-call k_rateConst_init(nkReact, k_rateConst)
 call chemSolve_init(absTol, relTol)
 
 !-----------------------------------------------
@@ -67,9 +60,8 @@ call chemSolve_init(absTol, relTol)
 !-----------------------------------------------
 ! Simulate the XML file which CCPP will use to drive the model
 ! Only called at beginnning
-  call k_rateConst_run(k_rateConst)
 
-  call  chemSolve_run(nkReact, vmr_init, timeStepSize, k_rateConst, absTol, relTol, vmr_curr, ierr)
+  call  chemSolve_run(vmr_init, timeStepSize, absTol, relTol, vmr_curr, ierr)
 
   print *, 'final_value'
   print *, vmr_curr
@@ -82,6 +74,5 @@ call chemSolve_init(absTol, relTol)
   deallocate (vmr_curr)
   deallocate (absTol)
   deallocate (relTol)
-  deallocate(k_rateConst)
 
 end program host_model_simulator
