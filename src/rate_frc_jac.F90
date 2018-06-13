@@ -139,7 +139,7 @@ contains
     real(r8), intent(in)::  vmr(:)              ! volume mixing ratios of each component in order
     real(r8) :: jac(size(vmr),size(vmr))   ! sensitivity of forcing to changes in each vmr
   
-    jac(:,:) = 0.
+    jac(:,:) = 0._r8
   
     ! Jacobian  
     jac(1,1)  = jac(1,1) - this%k_rateConst(1)
