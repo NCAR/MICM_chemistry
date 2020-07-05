@@ -40,10 +40,10 @@ contains
 
     j_rateConst(:) = prates(level_number,:)
 
-    print *, 'j_rateConst'
-    do i = 1, size(j_rateConst(:))
-    print *, i, j_rateConst(i)
-    end do
+    !print *, 'j_rateConst'
+    !do i = 1, size(j_rateConst(:))
+      !print *, i, j_rateConst(i)
+    !end do
 
   end subroutine photolysis_interstitial_run
 end module photolysis_interstitial
